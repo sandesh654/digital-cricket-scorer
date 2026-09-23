@@ -2,6 +2,12 @@
 // This is the most important screen in the app
 // It handles all scoring logic and updates the database after every ball
 
+import {
+  calculateWinProbability,
+  getProbabilityDescription,
+  getProbabilityColour,
+} from '../logic/winProbability';
+
 import { useState, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
@@ -400,19 +406,18 @@ export default function ScoringScreen({ route, navigation }) {
             </Text>
           </View>
 
-          {/* Target (2nd innings only) */}
-          {target && (
-            <View style={styles.targetBox}>
-              <Text style={styles.targetLabel}>Target</Text>
-              <Text style={styles.targetRuns}>{target}</Text>
-              <Text style={styles.targetNeeded}>
-                Need {Math.max(0, target - totalRuns)} off{' '}
-                {Math.max(0, (totalOvers * 6) - totalBalls)} balls
-              </Text>
-              <Text style={styles.targetRRR}>RRR: {getRequiredRate()}</Text>
-            </View>
-          )}
-
+          {/* Target and Win Probability (2nd innings only) */}
+    {target && (
+  <View style={styles.targetBox}>
+    <Text style={styles.targetLabel}>Target</Text>
+    <Text style={styles.targetRuns}>{target}</Text>
+    <Text style={styles.targetNeeded}>
+      Need {Math.max(0, target - totalRuns)} off{' '}
+      {Math.max(0, (totalOvers * 6) - totalBalls)} balls
+    </Text>
+    <Text style={styles.targetRRR}>RRR: {getRequiredRate()}</Text>
+  </View>
+)}
         </View>
 
         {/* ── CURRENT OVER DISPLAY ─────────────────────────────────────── */}
