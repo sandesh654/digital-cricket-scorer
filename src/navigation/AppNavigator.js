@@ -18,6 +18,11 @@ import MatchSummaryScreen from '../Screens/MatchSummaryScreen';
 import MatchHistoryScreen from '../Screens/MatchHistoryScreen';
 import MatchDetailScreen  from '../Screens/MatchDetailScreen';
 import PlayerStatsScreen  from '../Screens/PlayerStatsScreen';
+import WinProbabilityScreen from '../Screens/WinProbabilityScreen';
+import TournamentsListScreen  from '../Screens/TournamentsListScreen';
+import TournamentSetupScreen  from '../Screens/TournamentSetupScreen';
+import TournamentHomeScreen   from '../Screens/TournamentHomeScreen';
+import TournamentTossScreen   from '../Screens/TournamentTossScreen';
 
 // Create the stack navigator instance
 const Stack = createNativeStackNavigator();
@@ -115,6 +120,13 @@ export default function AppNavigator() {
           component={PlayerStatsScreen}
           options={{ title: 'Player Statistics' }}
         />
+
+        <Stack.Screen name="WinProbability" component={WinProbabilityScreen} options={{ title: 'Win Probability' }} />
+
+          <Stack.Screen name="TournamentsList"  component={TournamentsListScreen}  options={{ title: 'Tournaments' }} />
+<Stack.Screen name="TournamentSetup"  component={TournamentSetupScreen}  options={{ title: 'New Tournament' }} />
+<Stack.Screen name="TournamentHome"   component={TournamentHomeScreen}   options={{ headerShown: false }} />
+<Stack.Screen name="TournamentToss"   component={TournamentTossScreen}   options={{ title: 'Toss' }} />
 
       </Stack.Navigator>
     </NavigationContainer>

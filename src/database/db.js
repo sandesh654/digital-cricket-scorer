@@ -120,6 +120,51 @@ export const initDatabase = () => {
       FOREIGN KEY (innings_id) REFERENCES innings(id) ON DELETE CASCADE,
       FOREIGN KEY (player_id) REFERENCES players(id)
     );
+
+    -- ── TOURNAMENT TABLES ──────────────────────────────────────────────────
+
+    -- Tournaments
+    CREATE TABLE IF NOT EXISTS tournaments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      total_overs INTEGER NOT NULL DEFAULT 20,
+      num_groups INTEGER NOT NULL DEFAULT 2,
+      status TEXT NOT NULL DEFAULT 'setup',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Teams registered in a tournament (with group assignment)
+    CREATE TABLE IF NOT EXISTS tournament_teams (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL,
+      team_id INTEGER NOT NULL,
+      group_name TEXT NOT NULL DEFAULT 'A',
+      played INTEGER DEFAULT 0,
+      won INTEGER DEFAULT 0,
+      lost INTEGER DEFAULT 0,
+      no_result INTEGER DEFAULT 0,
+      points INTEGER DEFAULT 0,
+      nrr REAL DEFAULT 0.0,
+      FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE,
+      FOREIGN KEY (team_id) REFERENCES teams(id)
+    );
+
+    -- Fixtures in a tournament (links to matches table)
+    CREATE TABLE IF NOT EXISTS tournament_matches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tournament_id INTEGER NOT NULL,
+      match_id INTEGER,
+      team1_id INTEGER NOT NULL,
+      team2_id INTEGER NOT NULL,
+      stage TEXT NOT NULL DEFAULT 'group',
+      group_name TEXT,
+      match_label TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (tournament_id) REFERENCES tournaments(id) ON DELETE CASCADE,
+      FOREIGN KEY (match_id) REFERENCES matches(id),
+      FOREIGN KEY (team1_id) REFERENCES teams(id),
+      FOREIGN KEY (team2_id) REFERENCES teams(id)
+    );
   `);
 };
 
@@ -227,6 +272,21 @@ export const getCompletedMatches = () => {
     JOIN teams t2 ON m.team2_id = t2.id
     LEFT JOIN teams w ON m.winner_id = w.id
     WHERE m.status = 'completed'
+    ORDER BY m.created_at DESC
+  `);
+};
+
+export const getLiveMatches = () => {
+  return db.getAllSync(`
+    SELECT m.*,
+      t1.name AS team1_name,
+      t2.name AS team2_name,
+      tw.name AS toss_winner_name
+    FROM matches m
+    JOIN teams t1 ON m.team1_id = t1.id
+    JOIN teams t2 ON m.team2_id = t2.id
+    LEFT JOIN teams tw ON m.toss_winner_id = tw.id
+    WHERE m.status = 'live'
     ORDER BY m.created_at DESC
   `);
 };
@@ -402,35 +462,110 @@ export const upsertBowlingScorecard = (inningsId, playerId, updates) => {
   }
 };
 
-// ─── PLAYER CAREER STATS ──────────────────────────────────────────────────────
+// ─── TOURNAMENT QUERIES ───────────────────────────────────────────────────────
 
-export const getPlayerBattingStats = (playerId) => {
-  return db.getFirstSync(`
-    SELECT
-      COUNT(*)                                         AS innings,
-      SUM(runs)                                        AS total_runs,
-      MAX(runs)                                        AS highest_score,
-      SUM(fours)                                       AS total_fours,
-      SUM(sixes)                                       AS total_sixes,
-      SUM(balls_faced)                                 AS total_balls,
-      COUNT(CASE WHEN runs >= 50 AND runs < 100 THEN 1 END) AS fifties,
-      COUNT(CASE WHEN runs >= 100 THEN 1 END)          AS hundreds
-    FROM batting_scorecards
-    WHERE player_id = ?
-  `, [playerId]);
+export const createTournament = (name, totalOvers, numGroups) => {
+  return db.runSync(
+    `INSERT INTO tournaments (name, total_overs, num_groups, status)
+     VALUES (?, ?, ?, 'setup')`,
+    [name, totalOvers, numGroups]
+  );
 };
 
-export const getPlayerBowlingStats = (playerId) => {
-  return db.getFirstSync(`
-    SELECT
-      COUNT(*)       AS innings_bowled,
-      SUM(wickets)   AS total_wickets,
-      SUM(runs_given)AS total_runs_given,
-      SUM(balls_bowled) AS total_balls,
-      SUM(maidens)   AS total_maidens
-    FROM bowling_scorecards
-    WHERE player_id = ?
-  `, [playerId]);
+export const getAllTournaments = () => {
+  return db.getAllSync(
+    'SELECT * FROM tournaments ORDER BY created_at DESC'
+  );
 };
 
-export default db;
+export const getTournamentById = (tournamentId) => {
+  return db.getFirstSync(
+    'SELECT * FROM tournaments WHERE id = ?',
+    [tournamentId]
+  );
+};
+
+export const updateTournamentStatus = (tournamentId, status) => {
+  db.runSync(
+    'UPDATE tournaments SET status = ? WHERE id = ?',
+    [status, tournamentId]
+  );
+};
+
+// ── Tournament teams ──────────────────────────────────────────────────────────
+
+export const addTeamToTournament = (tournamentId, teamId, groupName) => {
+  return db.runSync(
+    `INSERT INTO tournament_teams (tournament_id, team_id, group_name)
+     VALUES (?, ?, ?)`,
+    [tournamentId, teamId, groupName]
+  );
+};
+
+export const getTournamentTeams = (tournamentId) => {
+  return db.getAllSync(`
+    SELECT tt.*, t.name AS team_name, t.home_ground
+    FROM tournament_teams tt
+    JOIN teams t ON tt.team_id = t.id
+    WHERE tt.tournament_id = ?
+    ORDER BY tt.group_name ASC, tt.points DESC, tt.nrr DESC
+  `, [tournamentId]);
+};
+
+export const updateTournamentTeamStats = (tournamentId, teamId, won) => {
+  // won = true → win, false → loss
+  const points = won ? 2 : 0;
+  db.runSync(
+    `UPDATE tournament_teams SET
+       played = played + 1,
+       won    = won    + ?,
+       lost   = lost   + ?,
+       points = points + ?
+     WHERE tournament_id = ? AND team_id = ?`,
+    [won ? 1 : 0, won ? 0 : 1, points, tournamentId, teamId]
+  );
+};
+
+// ── Tournament matches / fixtures ─────────────────────────────────────────────
+
+export const addTournamentMatch = (tournamentId, team1Id, team2Id, stage, groupName, matchLabel) => {
+  return db.runSync(
+    `INSERT INTO tournament_matches
+       (tournament_id, team1_id, team2_id, stage, group_name, match_label)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [tournamentId, team1Id, team2Id, stage, groupName, matchLabel]
+  );
+};
+
+export const getTournamentMatches = (tournamentId) => {
+  return db.getAllSync(`
+    SELECT tm.*,
+      t1.name AS team1_name,
+      t2.name AS team2_name,
+      m.status AS match_status,
+      m.winner_id,
+      m.result_summary,
+      w.name AS winner_name
+    FROM tournament_matches tm
+    JOIN teams t1 ON tm.team1_id = t1.id
+    JOIN teams t2 ON tm.team2_id = t2.id
+    LEFT JOIN matches m ON tm.match_id = m.id
+    LEFT JOIN teams w ON m.winner_id = w.id
+    WHERE tm.tournament_id = ?
+    ORDER BY tm.stage ASC, tm.id ASC
+  `, [tournamentId]);
+};
+
+export const linkMatchToTournamentFixture = (tournamentMatchId, matchId) => {
+  db.runSync(
+    'UPDATE tournament_matches SET match_id = ? WHERE id = ?',
+    [matchId, tournamentMatchId]
+  );
+};
+
+export const setKnockoutTeams = (tournamentMatchId, team1Id, team2Id) => {
+  db.runSync(
+    'UPDATE tournament_matches SET team1_id = ?, team2_id = ? WHERE id = ?',
+    [team1Id, team2Id, tournamentMatchId]
+  );
+};

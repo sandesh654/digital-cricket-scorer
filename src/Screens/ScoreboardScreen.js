@@ -4,7 +4,8 @@
 // and bowling card (overs, maidens, runs, wickets, economy)
 
 import {
-  View, Text, ScrollView, StyleSheet, SafeAreaView
+  View, Text, ScrollView, StyleSheet, SafeAreaView,
+  TouchableOpacity, Share
 } from 'react-native';
 
 export default function ScoreboardScreen({ route }) {
@@ -39,6 +40,38 @@ export default function ScoreboardScreen({ route }) {
   const getEconomy = (runs, balls) => {
     if (!balls) return '0.00';
     return (runs / (balls / 6)).toFixed(2);
+  };
+
+  // ── SHARE SCORECARD ──────────────────────────────────────────────────────
+  const handleShare = async () => {
+    let text = `🏏 CricScore — Match Scorecard\n`;
+    text += `${'─'.repeat(36)}\n`;
+    text += `${battingTeam.name}: ${totalRuns}/${totalWickets} (${getOversDisplay(totalBalls)} ov)\n\n`;
+
+    text += `BATTING\n${'─'.repeat(36)}\n`;
+    battingPlayers
+      .filter(p => battingStats[p.id]?.balls_faced > 0 || battingStats[p.id]?.is_batting === 1)
+      .forEach(p => {
+        const s = battingStats[p.id];
+        text += `${p.name.padEnd(18)} ${String(s?.runs ?? 0).padStart(3)}  (${s?.balls_faced ?? 0}b)  SR: ${getStrikeRate(s?.runs ?? 0, s?.balls_faced ?? 0)}\n`;
+        if (s?.how_out && s.how_out !== 'not out') text += `  ${s.how_out}\n`;
+      });
+
+    text += `\nBOWLING\n${'─'.repeat(36)}\n`;
+    bowlingPlayers
+      .filter(p => bowlingStats[p.id]?.balls_bowled > 0)
+      .forEach(p => {
+        const s = bowlingStats[p.id];
+        text += `${p.name.padEnd(18)} ${getOversDisplay(s?.balls_bowled ?? 0)}ov  ${s?.runs_given ?? 0}r  ${s?.wickets ?? 0}w  Econ: ${getEconomy(s?.runs_given ?? 0, s?.balls_bowled ?? 0)}\n`;
+      });
+
+    text += `\nShared via CricScore 🏏`;
+
+    try {
+      await Share.share({ message: text, title: 'CricScore — Match Scorecard' });
+    } catch (error) {
+      console.error('Share error:', error);
+    }
   };
 
   // ── BATTING CARD ─────────────────────────────────────────────────────────
@@ -171,6 +204,12 @@ export default function ScoreboardScreen({ route }) {
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.scroll}>
+
+        {/* Share button */}
+        <TouchableOpacity style={styles.shareBtn} onPress={handleShare} activeOpacity={0.8}>
+          <Text style={styles.shareBtnText}>📤  Share Scorecard</Text>
+        </TouchableOpacity>
+
         {renderBattingCard()}
         {renderBowlingCard()}
         <View style={styles.note}>
@@ -186,6 +225,12 @@ const styles = StyleSheet.create({
 
   safe:   { flex:1, backgroundColor:'#F5F5F5' },
   scroll: { padding:16, paddingBottom:40 },
+
+  shareBtn: {
+    backgroundColor: '#FFC107', borderRadius: 12,
+    padding: 14, alignItems: 'center', marginBottom: 16,
+  },
+  shareBtnText: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
 
   card: {
     backgroundColor:'#FFFFFF', borderRadius:14, marginBottom:16,

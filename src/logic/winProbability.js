@@ -1,4 +1,4 @@
-// winProbability.js — Win Probability Calculator
+// src/logic/winProbability.js — Win Probability Calculator
 // Based on statistical model from Akhtar et al. (2022)
 // "In-game winner prediction and winning strategy in cricket: A ML approach"
 //
@@ -11,91 +11,63 @@
 // ── MAIN FUNCTION ─────────────────────────────────────────────────────────────
 // Returns win probability for the BATTING team (0 to 100)
 // Call this after every ball during the 2nd innings
+//
+// Accepts either positional args or a single object:
+//   calculateWinProbability({ runsScored, wicketsFallen, ballsBowled, target, totalOvers })
+//   calculateWinProbability(target, runsScored, wicketsFallen, ballsBowled, totalBalls)
 
-export const calculateWinProbability = ({
-  runsScored,       // runs scored so far in 2nd innings
-  wicketsFallen,    // wickets fallen in 2nd innings
-  ballsBowled,      // legal balls bowled in 2nd innings
-  target,           // target score (1st innings total + 1)
-  totalOvers,       // total overs in the match
-}) => {
+export const calculateWinProbability = (
+  targetOrObj,
+  currentScore,
+  wickets,
+  ballsBowled,
+  totalBalls
+) => {
+  // Support object-style call from ScoringScreen
+  let t, score, wkts, bowled, tBalls;
+  if (typeof targetOrObj === 'object' && targetOrObj !== null) {
+    t      = targetOrObj.target;
+    score  = targetOrObj.runsScored;
+    wkts   = targetOrObj.wicketsFallen;
+    bowled = targetOrObj.ballsBowled;
+    tBalls = (targetOrObj.totalOvers || 20) * 6;
+  } else {
+    t      = targetOrObj;
+    score  = currentScore;
+    wkts   = wickets;
+    bowled = ballsBowled;
+    tBalls = totalBalls;
+  }
 
-  // ── VALIDATION ──────────────────────────────────────────────────────────────
-  // Return 50/50 if match has not started yet
-  if (ballsBowled === 0 || !target) return 50;
+  const runsNeeded = t - score;
+  const ballsLeft  = tBalls - bowled;
 
-  const totalBalls    = totalOvers * 6;
-  const ballsRemaining = totalBalls - ballsBowled;
-  const runsNeeded    = target - runsScored;
-  const wicketsLeft   = 10 - wicketsFallen;
+  // Match already decided
+  if (runsNeeded <= 0) return 99;   // batting team has won
+  if (ballsLeft <= 0 || wkts >= 10) return 1; // batting team has lost
 
-  // ── CHECK WIN/LOSS CONDITIONS ────────────────────────────────────────────────
-  // Batting team has won
-  if (runsScored >= target) return 100;
+  // Required run rate (per over)
+  const rrr = (runsNeeded / ballsLeft) * 6;
 
-  // All out or no balls remaining — batting team lost
-  if (wicketsFallen >= 10 || ballsRemaining <= 0) return 0;
+  // Current run rate (per over)
+  const crr = bowled > 0 ? (score / bowled) * 6 : 0;
 
-  // ── CALCULATE KEY METRICS ───────────────────────────────────────────────────
-  // Current run rate — runs per over scored so far
-  const currentRR = runsScored / (ballsBowled / 6);
+  // Wicket resource factor: square-root decay as wickets fall
+  const wicketsRemaining = 10 - wkts;
+  const resourceFactor   = Math.sqrt(wicketsRemaining / 10);
 
-  // Required run rate — runs per over needed to win
-  const requiredRR = runsNeeded / (ballsRemaining / 6);
+  // Run-rate differential weighted by remaining resources
+  const differential = (crr - rrr) * resourceFactor;
 
-  // Run rate ratio — how does current RR compare to required RR
-  // Greater than 1 means batting team is ahead of required rate
-  const rrRatio = currentRR / requiredRR;
+  // Sigmoid maps differential to (0, 1), then scale to 0-100
+  const probability = 1 / (1 + Math.exp(-differential * 0.3));
 
-  // Wicket resource factor — more wickets remaining = better position
-  // Ranges from 0 (all out) to 1 (no wickets lost)
-  const wicketFactor = wicketsLeft / 10;
-
-  // Balls remaining factor — more balls remaining = more opportunity
-  // Ranges from 0 (no balls left) to 1 (full innings remaining)
-  const ballsFactor = ballsRemaining / totalBalls;
-
-  // ── CALCULATE BASE PROBABILITY ───────────────────────────────────────────────
-  // Start with run rate comparison as the primary factor
-  // sigmoid function converts ratio to probability-like value
-  let baseProbability = sigmoid(rrRatio - 1, 3);
-
-  // ── APPLY WICKET PENALTY ────────────────────────────────────────────────────
-  // Fewer wickets = lower win probability
-  // This penalty increases as more wickets fall
-  const wicketPenalty = (1 - wicketFactor) * 0.3;
-  baseProbability = baseProbability - wicketPenalty;
-
-  // ── APPLY MATCH PHASE FACTOR ─────────────────────────────────────────────────
-  // In early overs — result is more uncertain, pull toward 50%
-  // In death overs — result is more certain, move away from 50%
-  const progressFactor = ballsBowled / totalBalls;
-
-  // Early in innings: blend toward 50% (high uncertainty)
-  // Late in innings: blend toward extreme values (low uncertainty)
-  baseProbability = blend(baseProbability, 0.5, 1 - progressFactor * 0.6);
-
-  // ── CLAMP TO 0-100 RANGE ─────────────────────────────────────────────────────
-  const probability = Math.max(2, Math.min(98, baseProbability * 100));
-
-  return Math.round(probability);
+  // Clamp to 1–99 — never show 0% or 100% until match is definitively over
+  return Math.round(Math.min(Math.max(probability * 100, 1), 99));
 };
 
-// ── HELPER: SIGMOID FUNCTION ──────────────────────────────────────────────────
-// Converts a ratio to a smooth 0-1 probability curve
-// steepness controls how quickly probability changes
-const sigmoid = (x, steepness = 2) => {
-  return 1 / (1 + Math.exp(-steepness * x));
-};
-
-// ── HELPER: BLEND TWO VALUES ──────────────────────────────────────────────────
-// Blends value a toward value b by factor t (0 = no blend, 1 = full blend)
-const blend = (a, b, t) => {
-  return a * (1 - t) + b * t;
-};
-
-// ── GET PROBABILITY DESCRIPTION ───────────────────────────────────────────────
-// Returns a human-readable description of the current match situation
+// ── PROBABILITY DESCRIPTION ───────────────────────────────────────────────────
+// Returns a human-readable description of the match situation
 export const getProbabilityDescription = (probability, battingTeam, bowlingTeam) => {
   if (probability >= 90) return `${battingTeam} are almost certain to win`;
   if (probability >= 75) return `${battingTeam} are in a strong position`;
@@ -107,10 +79,43 @@ export const getProbabilityDescription = (probability, battingTeam, bowlingTeam)
   return `${bowlingTeam} are almost certain to win`;
 };
 
-// ── GET COLOUR FOR PROBABILITY BAR ────────────────────────────────────────────
-// Returns a colour based on the batting team's win probability
+// ── PROBABILITY COLOUR ────────────────────────────────────────────────────────
+// Returns a colour based on probability for the batting team
 export const getProbabilityColour = (probability) => {
-  if (probability >= 65) return '#1D9E75'; // green — batting team winning
-  if (probability >= 45) return '#F0A500'; // amber — close match
-  return '#E24B4A';                         // red — batting team losing
+  if (probability >= 65) return '#1D9E75'; // green  — batting team ahead
+  if (probability >= 45) return '#F0A500'; // amber  — close match
+  return '#E24B4A';                         // red    — bowling team ahead
+};
+
+// ── TIMELINE GENERATOR ────────────────────────────────────────────────────────
+// Generate probability data points for every ball of the second innings.
+// Used by WinProbabilityScreen to populate the chart.
+//
+// @param {Array}  balls      - Array of ball records from SQLite
+// @param {number} target     - Target score
+// @param {number} totalBalls - Total balls available (overs × 6)
+// @returns {Array}           - Array of { ball, label, probability } objects
+
+export const generateProbabilityTimeline = (balls, target, totalBalls) => {
+  const timeline = [];
+  let score   = 0;
+  let wickets = 0;
+
+  balls.forEach((ball, index) => {
+    score   += (ball.runs_scored || 0) + (ball.extra_runs || ball.extras || 0);
+    if (ball.is_wicket) wickets += 1;
+
+    const ballNumber    = index + 1;
+    const overCompleted = Math.floor(index / 6);
+    const ballInOver    = (index % 6) + 1;
+    const label         = `${overCompleted}.${ballInOver}`;
+
+    const probability = calculateWinProbability(
+      target, score, wickets, ballNumber, totalBalls
+    );
+
+    timeline.push({ ball: ballNumber, label, probability });
+  });
+
+  return timeline;
 };

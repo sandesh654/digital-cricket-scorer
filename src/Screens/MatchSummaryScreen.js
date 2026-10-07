@@ -1,27 +1,51 @@
 // MatchSummaryScreen.js — Final result screen shown when match ends
 // Shows: match result, both team scorecards, and match details
+// UPDATED: Updates tournament points table when match is part of a tournament
 
 import {
   View, Text, ScrollView, StyleSheet,
   SafeAreaView, TouchableOpacity
 } from 'react-native';
-import { getInningsByMatch } from '../database/db';
-import { useState, useEffect } from 'react';
+import { getInningsByMatch, updateTournamentTeamStats } from '../database/db';
+import { useState, useEffect, useRef } from 'react';
 
 export default function MatchSummaryScreen({ route, navigation }) {
 
-  const { matchId, teamA, teamB, resultText } = route.params;
+  const {
+    matchId, teamA, teamB, resultText,
+    // Tournament context — only present for tournament matches
+    tournamentId, tournamentMatchId, winnerId,
+  } = route.params;
 
   // Innings data loaded from database
   const [innings, setInnings] = useState([]);
 
-  // ── LOAD INNINGS DATA ──────────────────────────────────────────────────────
+  // Guard so we only update tournament stats once
+  const statsUpdated = useRef(false);
+
+  // ── LOAD INNINGS DATA + UPDATE TOURNAMENT STATS ────────────────────────────
   useEffect(() => {
     try {
       const data = getInningsByMatch(matchId);
       setInnings(data);
     } catch (error) {
       console.error('Error loading innings:', error);
+    }
+
+    // Update points table if this match belongs to a tournament
+    if (tournamentId && tournamentMatchId && winnerId !== undefined && !statsUpdated.current) {
+      statsUpdated.current = true;
+      try {
+        const team1Won = winnerId === teamA.id;
+        const team2Won = winnerId === teamB.id;
+        // Only update if there is an actual winner (not a tie/no result)
+        if (team1Won || team2Won) {
+          updateTournamentTeamStats(tournamentId, teamA.id, team1Won);
+          updateTournamentTeamStats(tournamentId, teamB.id, team2Won);
+        }
+      } catch (e) {
+        console.error('Tournament stats update error:', e);
+      }
     }
   }, []);
 
@@ -108,6 +132,34 @@ export default function MatchSummaryScreen({ route, navigation }) {
             <Text style={styles.btnSecondaryText}>📋  Match History</Text>
           </TouchableOpacity>
 
+          {/* Win Probability — only show if there was a 2nd innings */}
+          {innings.length >= 2 && (
+            <TouchableOpacity
+              style={styles.btnWinProb}
+              onPress={() => navigation.navigate('WinProbability', {
+                inningsId: innings[1].id,
+                target: innings[0].total_runs + 1,
+                totalOvers: Math.ceil(innings[1].total_balls / 6) || 20,
+                battingTeamName: teamB.name,
+                bowlingTeamName: teamA.name,
+              })}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.btnWinProbText}>📈  View Win Probability</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Back to tournament if this was a tournament match */}
+          {tournamentId && (
+            <TouchableOpacity
+              style={styles.btnTournament}
+              onPress={() => navigation.navigate('TournamentHome', { tournamentId })}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.btnTournamentText}>🏆  Back to Tournament</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Go home */}
           <TouchableOpacity
             style={styles.btnPrimary}
@@ -187,4 +239,14 @@ const styles = StyleSheet.create({
     borderWidth:1.5, borderColor:'#1D9E75',
   },
   btnSecondaryText: { fontSize:16, fontWeight:'600', color:'#1D9E75' },
+  btnWinProb: {
+    backgroundColor: '#F0A500', borderRadius: 14,
+    padding: 16, alignItems: 'center',
+  },
+  btnWinProbText: { fontSize: 16, fontWeight: 'bold', color: '#FFFFFF' },
+  btnTournament: {
+    backgroundColor: '#7F77DD', borderRadius: 14,
+    padding: 16, alignItems: 'center',
+  },
+  btnTournamentText: { fontSize: 16, fontWeight: 'bold', color: '#FFFFFF' },
 });

@@ -1,11 +1,12 @@
 // MatchDetailScreen.js — Full scorecard for a completed match
 // Shows both innings batting and bowling cards
 // Loaded from SQLite using the match ID
+// UPDATED: Added Player Performance Ratings
 
 import { useState, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet,
-  SafeAreaView, ActivityIndicator
+  SafeAreaView, ActivityIndicator, TouchableOpacity
 } from 'react-native';
 import {
   getInningsByMatch,
@@ -13,8 +14,13 @@ import {
   getBowlingScorecard,
   getMatchById,
 } from '../database/db';
+import {
+  analyseMatch,
+  getRatingColour,
+  getRatingStars,
+} from '../services/playerRatings';
 
-export default function MatchDetailScreen({ route }) {
+export default function MatchDetailScreen({ route, navigation }) {
 
   const { matchId, matchItem } = route.params;
 
@@ -26,6 +32,11 @@ export default function MatchDetailScreen({ route }) {
   // keyed by innings id
   const [battingData, setBattingData]   = useState({});
   const [bowlingData, setBowlingData]   = useState({});
+
+  // ── PLAYER RATINGS STATE ───────────────────────────────────────────────────
+  const [aiRatings, setAiRatings] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError]     = useState(null);
 
   // ── LOAD ALL DATA ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -61,6 +72,29 @@ export default function MatchDetailScreen({ route }) {
     }
   };
 
+  // ── PLAYER RATINGS ─────────────────────────────────────────────────────────
+  const handlePlayerRatings = async () => {
+    setAiLoading(true);
+    setAiError(null);
+    setAiRatings(null);
+
+    try {
+      const matchInfo = {
+        team1Name:     matchItem.team1_name,
+        team2Name:     matchItem.team2_name,
+        totalOvers:    matchItem.total_overs,
+        resultSummary: matchItem.result_summary,
+      };
+      const result = await analyseMatch(matchInfo, innings, battingData, bowlingData);
+      setAiRatings(result);
+    } catch (err) {
+      console.error('Ratings error:', err);
+      setAiError('Could not generate ratings. Please try again.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   // ── HELPERS ────────────────────────────────────────────────────────────────
   const getOversDisplay = (balls) => {
     if (!balls) return '0.0';
@@ -86,6 +120,85 @@ export default function MatchDetailScreen({ route }) {
       </View>
     );
   }
+
+  // ── RENDER PLAYER RATINGS ──────────────────────────────────────────────────
+  const renderRatings = () => {
+    if (aiLoading) {
+      return (
+        <View style={styles.ratingsLoadingBox}>
+          <ActivityIndicator size="large" color="#8E44AD" />
+          <Text style={styles.ratingsLoadingText}>Calculating player ratings…</Text>
+        </View>
+      );
+    }
+
+    if (aiError) {
+      return (
+        <View style={styles.ratingsErrorBox}>
+          <Text style={styles.ratingsErrorText}>⚠️  {aiError}</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={handlePlayerRatings}>
+            <Text style={styles.retryBtnText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (!aiRatings) return null;
+
+    const renderCard = (player, type) => {
+      const colour = getRatingColour(player.rating);
+      const stars  = getRatingStars(player.rating);
+      return (
+        <View key={`${type}-${player.playerId}`} style={styles.ratingCard}>
+          <View style={styles.ratingLeft}>
+            <Text style={styles.ratingName}>{player.playerName}</Text>
+            <Text style={styles.ratingStars}>{stars}</Text>
+            <Text style={styles.ratingComment}>{player.comment}</Text>
+          </View>
+          <View style={[styles.ratingBadge, { backgroundColor: colour }]}>
+            <Text style={styles.ratingNumber}>{player.rating.toFixed(1)}</Text>
+          </View>
+        </View>
+      );
+    };
+
+    return (
+      <View style={styles.ratingsSection}>
+        <View style={styles.ratingsSectionHeader}>
+          <Text style={styles.ratingsSectionTitle}>⭐ Player Ratings</Text>
+          <Text style={styles.ratingsSectionSubtitle}>Based on match performance</Text>
+        </View>
+
+        {aiRatings.battingRatings.length > 0 && (
+          <View style={styles.ratingsGroup}>
+            <Text style={styles.ratingsGroupLabel}>🏏 BATTING</Text>
+            {aiRatings.battingRatings.map(p => renderCard(p, 'bat'))}
+          </View>
+        )}
+
+        {aiRatings.bowlingRatings.length > 0 && (
+          <View style={styles.ratingsGroup}>
+            <Text style={styles.ratingsGroupLabel}>🎳 BOWLING</Text>
+            {aiRatings.bowlingRatings.map(p => renderCard(p, 'bowl'))}
+          </View>
+        )}
+
+        <View style={styles.legend}>
+          {[
+            { colour: '#1D9E75', label: '8–10  Excellent' },
+            { colour: '#F0A500', label: '6–7.9  Good' },
+            { colour: '#1A5276', label: '4–5.9  Average' },
+            { colour: '#E24B4A', label: '0–3.9  Poor' },
+          ].map(({ colour, label }) => (
+            <View key={label} style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: colour }]} />
+              <Text style={styles.legendText}>{label}</Text>
+            </View>
+          ))}
+        </View>
+      </View>
+    );
+  };
 
   // ── RENDER ONE INNINGS ─────────────────────────────────────────────────────
   const renderInnings = (inning, index) => {
@@ -231,6 +344,37 @@ export default function MatchDetailScreen({ route }) {
           )}
         </View>
 
+        {/* ── WIN PROBABILITY BUTTON (only if 2nd innings exists) ─────────── */}
+        {innings.length >= 2 && (
+          <TouchableOpacity
+            style={styles.winProbBtn}
+            onPress={() => navigation.navigate('WinProbability', {
+              inningsId:       innings[1].id,
+              target:          innings[0].total_runs + 1,
+              totalOvers:      matchItem.total_overs,
+              battingTeamName: matchItem.team2_name,
+              bowlingTeamName: matchItem.team1_name,
+            })}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.winProbBtnText}>📈  View Win Probability</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* ── PLAYER RATINGS BUTTON ────────────────────────────────────────── */}
+        {!aiRatings && !aiLoading && (
+          <TouchableOpacity
+            style={styles.ratingsBtn}
+            onPress={handlePlayerRatings}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.ratingsBtnText}>⭐  Get Player Ratings</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* ── RATINGS DISPLAY ──────────────────────────────────────────────── */}
+        {renderRatings()}
+
         {/* Both innings scorecards */}
         {innings.map((inning, index) => renderInnings(inning, index))}
 
@@ -255,7 +399,7 @@ const styles = StyleSheet.create({
     borderRadius:16,
     padding:20,
     alignItems:'center',
-    marginBottom:20,
+    marginBottom:16,
     shadowColor:'#1D9E75',
     shadowOffset:{ width:0, height:4 },
     shadowOpacity:0.3,
@@ -266,6 +410,123 @@ const styles = StyleSheet.create({
   resultTeams: { fontSize:16, fontWeight:'bold', color:'#FFFFFF', marginBottom:6 },
   resultText:  { fontSize:18, fontWeight:'bold', color:'#FFFFFF', textAlign:'center', marginBottom:6 },
   resultMeta:  { fontSize:12, color:'rgba(255,255,255,0.8)' },
+
+  // Win Probability button
+  winProbBtn: {
+    backgroundColor: '#F0A500',
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 12,
+    shadowColor: '#F0A500',
+    shadowOffset: { width:0, height:3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  winProbBtnText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+
+  // Player Ratings button
+  ratingsBtn: {
+    backgroundColor: '#8E44AD',
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+    shadowColor: '#8E44AD',
+    shadowOffset: { width:0, height:3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  ratingsBtnText: { fontSize:16, fontWeight:'bold', color:'#FFFFFF' },
+
+  // Ratings loading
+  ratingsLoadingBox: {
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 16,
+    elevation: 2,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4,
+  },
+  ratingsLoadingText: { marginTop:12, fontSize:15, fontWeight:'600', color:'#8E44AD' },
+
+  // Ratings error
+  ratingsErrorBox: {
+    backgroundColor: '#FFF3F3',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E24B4A',
+  },
+  ratingsErrorText: { color:'#E24B4A', fontSize:13, marginBottom:12 },
+  retryBtn: {
+    backgroundColor: '#E24B4A',
+    borderRadius: 8,
+    padding: 10,
+    alignItems: 'center',
+  },
+  retryBtnText: { color:'#FFF', fontWeight:'bold', fontSize:13 },
+
+  // Ratings section
+  ratingsSection: {
+    backgroundColor: '#FFF',
+    borderRadius: 14,
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#8E44AD', shadowOpacity: 0.12, shadowRadius: 6,
+  },
+  ratingsSectionHeader: {
+    backgroundColor: '#8E44AD',
+    padding: 14,
+  },
+  ratingsSectionTitle:    { color:'#FFF', fontSize:16, fontWeight:'bold' },
+  ratingsSectionSubtitle: { color:'rgba(255,255,255,0.7)', fontSize:12, marginTop:2 },
+
+  ratingsGroup: { paddingHorizontal:14, paddingTop:12, paddingBottom:4 },
+  ratingsGroupLabel: {
+    fontSize:12, fontWeight:'800', color:'#888',
+    letterSpacing:1, marginBottom:10,
+  },
+
+  // Individual rating card
+  ratingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FAFAFA',
+    borderRadius: 10,
+    marginBottom: 8,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+  },
+  ratingLeft:    { flex:1, marginRight:12 },
+  ratingName:    { fontSize:14, fontWeight:'700', color:'#1A1A1A', marginBottom:2 },
+  ratingStars:   { fontSize:14, color:'#F0A500', marginBottom:4 },
+  ratingComment: { fontSize:12, color:'#555', fontStyle:'italic' },
+  ratingBadge: {
+    width:52, height:52, borderRadius:26,
+    justifyContent:'center', alignItems:'center',
+    shadowColor:'#000', shadowOpacity:0.15, shadowRadius:4, elevation:2,
+  },
+  ratingNumber: { color:'#FFF', fontSize:16, fontWeight:'bold' },
+
+  // Legend
+  legend: {
+    flexDirection:'row', flexWrap:'wrap',
+    paddingHorizontal:14, paddingBottom:14, gap:8,
+  },
+  legendItem: { flexDirection:'row', alignItems:'center', gap:5, minWidth:'45%' },
+  legendDot:  { width:10, height:10, borderRadius:5 },
+  legendText: { fontSize:11, color:'#777' },
 
   // Innings block
   inningsBlock: {
